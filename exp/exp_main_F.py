@@ -13,6 +13,7 @@ from torch import optim
 from utils.augmentations import augmentation
 import os
 import time
+import csv
 
 import warnings
 import matplotlib.pyplot as plt
@@ -301,7 +302,8 @@ class Exp_Main(Exp_Basic):
         inputxy = []
         reconxy = []
         lows = []
-        folder_path = './test_results/' + setting + '/'
+        results_root = self.args.results_root
+        folder_path = os.path.join(results_root, setting, 'plots')
         if not os.path.exists(folder_path):
             os.makedirs(folder_path)
 
@@ -403,18 +405,43 @@ class Exp_Main(Exp_Basic):
         #     pass
 
         # result save
-        folder_path = './results/' + setting + '/'
+        folder_path = os.path.join(results_root, setting)
         if not os.path.exists(folder_path):
             os.makedirs(folder_path)
 
         mae, mse, rmse, mape, mspe, rse, corr = metric(preds, trues)
         print('mse:{}, mae:{}, rse:{}, corr:{}'.format(mse, mae, rse, corr))
-        f = open("result.txt", 'a')
-        f.write(setting + "  \n")
-        f.write('mse:{}, mae:{}, rse:{}, corr:{}'.format(mse, mae, rse, corr))
-        f.write('\n')
-        f.write('\n')
-        f.close()
+        metrics_path = os.path.join(results_root, 'metrics.csv')
+        os.makedirs(results_root, exist_ok=True)
+        needs_header = not os.path.exists(metrics_path)
+        with open(metrics_path, 'a', newline='') as metrics_file:
+            writer = csv.DictWriter(
+                metrics_file,
+                fieldnames=[
+                    'model', 'setting', 'data', 'seq_len', 'pred_len', 'seed',
+                    'train_mode', 'h_order', 'mse', 'mae', 'rmse', 'mape',
+                    'mspe', 'rse', 'corr_mean',
+                ],
+            )
+            if needs_header:
+                writer.writeheader()
+            writer.writerow({
+                'model': self.args.model,
+                'setting': setting,
+                'data': self.args.data,
+                'seq_len': self.args.seq_len,
+                'pred_len': self.args.pred_len,
+                'seed': self.args.seed,
+                'train_mode': self.args.train_mode,
+                'h_order': self.args.H_order,
+                'mse': mse,
+                'mae': mae,
+                'rmse': rmse,
+                'mape': mape,
+                'mspe': mspe,
+                'rse': rse,
+                'corr_mean': float(np.mean(corr)),
+            })
 
         # np.save(folder_path + 'metrics.npy', np.array([mae, mse, rmse, mape, mspe,rse, corr]))
         np.save(folder_path + 'pred.npy', preds)

@@ -8,6 +8,9 @@ scheduler's `ZE_AFFINITY_MASK` is preserved.  On an interactive node, set
 Checkpoints are stored on Lustre under
 `/lus/flare/projects/FRAME-IDP/siebenschuh/TimeSeriesTraining/FITS_checkpoints/FITS/`.
 Override that location per invocation with `FITS_CHECKPOINTS_ROOT=/path`.
+Test arrays, plots, and `metrics.csv` are stored under
+`/lus/flare/projects/FRAME-IDP/siebenschuh/TimeSeriesTraining/FITS_results/FITS/`.
+Override that location with `FITS_RESULTS_ROOT=/path`.
 
 ## First training test
 
@@ -29,9 +32,9 @@ Evaluate that saved checkpoint later with:
 bash scripts/FITS/aurora/evaluate_etth1_smoke.sh
 ```
 
-The test command writes its MSE to the terminal, `result.txt`, and a per-run
-log under `logs/FITS/aurora/`; it also saves arrays under `results/` and plots
-under `test_results/`.
+The test command writes its MSE to the terminal and a per-run log under
+`logs/FITS/aurora/`; it saves arrays, plots, and a mergeable `metrics.csv` in
+the Lustre FITS results lane described above.
 
 ## Selected-result runs
 
@@ -82,6 +85,15 @@ with seeds `114 514 1919 810 0`, then evaluate those five checkpoints with the
 same commands and aggregate their five reported MSE values.  Each model ID
 contains the seed, preventing checkpoint/result collisions present in the
 original shell scripts.
+
+The repository also provides the sequential batch form for all four horizons:
+
+```bash
+bash scripts/launch_benchmark.sh FITS train ETTh1
+bash scripts/launch_benchmark.sh FITS test ETTh1
+python scripts/merge_model_metrics.py
+python scripts/summarize_model_metrics.py
+```
 
 ## Reproducibility boundary
 

@@ -167,6 +167,15 @@ The experiment runners default to the shared FITS data directory:
 /lus/flare/projects/FRAME-IDP/siebenschuh/TimeSeriesTraining/FITS_checkpoints/FITS/
 ```
 
+FITS test arrays, plots, and mergeable metrics are stored separately under:
+
+```text
+/lus/flare/projects/FRAME-IDP/siebenschuh/TimeSeriesTraining/FITS_results/FITS/
+```
+
+The model-lane convention for FITS and future DIFFS, ANG, and ROUTER work is
+documented in [docs/model_lanes.md](docs/model_lanes.md).
+
 Download the four ETT datasets there:
 
 ```bash

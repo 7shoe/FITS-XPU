@@ -37,6 +37,7 @@ if [[ -n "${FITS_ZE_AFFINITY_MASK:-}" ]]; then
 fi
 export OMP_NUM_THREADS="${FITS_OMP_NUM_THREADS:-4}"
 checkpoints_root="${FITS_CHECKPOINTS_ROOT:-/lus/flare/projects/FRAME-IDP/siebenschuh/TimeSeriesTraining/FITS_checkpoints/FITS}"
+results_root="${FITS_RESULTS_ROOT:-/lus/flare/projects/FRAME-IDP/siebenschuh/TimeSeriesTraining/FITS_results/FITS}"
 
 case "$dataset" in
     ETTh1)
@@ -108,6 +109,7 @@ args=(
     --data "$data"
     --data_path "$data_path"
     --checkpoints "$checkpoints_root"
+    --results_root "$results_root"
     --features M
     --seq_len "$seq_len"
     --label_len 48

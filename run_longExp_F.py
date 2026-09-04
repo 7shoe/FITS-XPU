@@ -45,6 +45,12 @@ parser.add_argument(
     default='/lus/flare/projects/FRAME-IDP/siebenschuh/TimeSeriesTraining/FITS_checkpoints/FITS/',
     help='location of FITS model checkpoints',
 )
+parser.add_argument(
+    '--results_root',
+    type=str,
+    default='/lus/flare/projects/FRAME-IDP/siebenschuh/TimeSeriesTraining/FITS_results/FITS/',
+    help='location of FITS test arrays, plots, and metrics',
+)
 
 # forecasting task
 parser.add_argument('--seq_len', type=int, default=96, help='input sequence length')
