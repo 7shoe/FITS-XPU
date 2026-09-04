@@ -1,0 +1,7 @@
+# Aurora provides the XPU-enabled PyTorch stack and its scientific dependencies
+# through the `frameworks` module. Do NOT install the upstream requirements.txt
+# in the Aurora venv: it would shadow that managed stack.
+#
+# FITS imports THOP unconditionally for model profiling. This is the published
+# PyPI release corresponding to the repository's unavailable `thop==0.1.1` pin.
+thop==0.1.1.post2209072238
