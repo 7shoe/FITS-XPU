@@ -39,7 +39,12 @@ parser.add_argument('--features', type=str, default='M',
 parser.add_argument('--target', type=str, default='OT', help='target feature in S or MS task')
 parser.add_argument('--freq', type=str, default='h',
                     help='freq for time features encoding, options:[s:secondly, t:minutely, h:hourly, d:daily, b:business days, w:weekly, m:monthly], you can also use more detailed freq like 15min or 3h')
-parser.add_argument('--checkpoints', type=str, default='./checkpoints/', help='location of model checkpoints')
+parser.add_argument(
+    '--checkpoints',
+    type=str,
+    default='/lus/flare/projects/FRAME-IDP/siebenschuh/TimeSeriesTraining/FITS_checkpoints/FITS/',
+    help='location of FITS model checkpoints',
+)
 
 # forecasting task
 parser.add_argument('--seq_len', type=int, default=96, help='input sequence length')

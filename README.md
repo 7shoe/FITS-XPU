@@ -37,6 +37,12 @@ Do not set a job-wide `ZE_AFFINITY_MASK` for this mode. Rank placement comes
 from `PALS_LOCAL_RANKID`, and ambiguous or incompatible launch configurations
 fail before model construction.
 
+For a single-XPU interactive-node smoke test, selected-result configurations,
+and separate checkpoint evaluation, see
+[scripts/FITS/aurora/README.md](scripts/FITS/aurora/README.md). The historical
+author ablation scripts are preserved separately in
+[`scripts/FITS/legacy_author_ablation_scripts/`](scripts/FITS/legacy_author_ablation_scripts/).
+
 ## Also see our exciting new work! 
 
 Wanna see something beyond FITS? Check: 
@@ -153,6 +159,12 @@ The experiment runners default to the shared FITS data directory:
 
 ```text
 /lus/flare/projects/FRAME-IDP/siebenschuh/TimeSeriesTraining/FITS_data/
+```
+
+`run_longExp_F.py` stores FITS checkpoints on Lustre by default:
+
+```text
+/lus/flare/projects/FRAME-IDP/siebenschuh/TimeSeriesTraining/FITS_checkpoints/FITS/
 ```
 
 Download the four ETT datasets there:
