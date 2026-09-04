@@ -51,6 +51,9 @@ coverage.xml
 .pytest_cache/
 cover/
 
+# Aurora/PBS smoke-test output
+artifacts/aurora_smoke/
+
 # Translations
 *.mo
 *.pot
