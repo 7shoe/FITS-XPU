@@ -147,6 +147,46 @@ The best result is in bold and the second best is in italic. The results are rep
 
 The discovered bug predominantly impacts results on smaller datasets like ETTh1 and ETTh2. Interestingly, for other datasets, certain models, such as PatchTST on ETTm1, demonstrate enhanced performance. FITS still maintains its good enough and comparable-to-sota performance.
 
+## Datasets
+
+The experiment runners default to the shared FITS data directory:
+
+```text
+/lus/flare/projects/FRAME-IDP/siebenschuh/TimeSeriesTraining/FITS_data/
+```
+
+Download the four ETT datasets there:
+
+```bash
+fits_data_dir="/lus/flare/projects/FRAME-IDP/siebenschuh/TimeSeriesTraining/FITS_data"
+mkdir -p "$fits_data_dir"
+
+for name in ETTh1 ETTh2 ETTm1 ETTm2; do
+  curl -fL --retry 3 \
+    -o "$fits_data_dir/${name}.csv" \
+    "https://raw.githubusercontent.com/zhouhaoyi/ETDataset/main/ETT-small/${name}.csv"
+done
+```
+
+Download the remaining FITS forecasting benchmarks:
+
+```bash
+curl -fL --retry 3 \
+  -o "$fits_data_dir/weather.csv" \
+  'https://huggingface.co/datasets/thuml/Time-Series-Library/resolve/main/weather/weather.csv?download=true'
+
+curl -fL --retry 3 \
+  -o "$fits_data_dir/electricity.csv" \
+  'https://huggingface.co/datasets/thuml/Time-Series-Library/resolve/main/electricity/electricity.csv?download=true'
+
+curl -fL --retry 3 \
+  -o "$fits_data_dir/traffic.csv" \
+  'https://huggingface.co/datasets/thuml/Time-Series-Library/resolve/main/traffic/traffic.csv?download=true'
+```
+
+The FITS scripts use this directory by default. Override it for another data
+location with `--root_path /path/to/data/`.
+
 ### Replication
 
 - We have uploaded the training logs for community review. Additionally, we've provided logs for other baseline models. It's important to note that these logs were generated using their respective official codebases, not the versions in this repository.
