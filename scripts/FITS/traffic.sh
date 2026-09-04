@@ -1,4 +1,4 @@
-export CUDA_VISIBLE_DEVICES=5
+export ZE_AFFINITY_MASK=5
 # add for DLinear-I
 if [ ! -d "./logs" ]; then
     mkdir ./logs

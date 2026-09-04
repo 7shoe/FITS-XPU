@@ -1,4 +1,4 @@
-export CUDA_VISIBLE_DEVICES=6
+export ZE_AFFINITY_MASK=6
 
 # add for DLinear-I
 if [ ! -d "./logs" ]; then

@@ -285,9 +285,9 @@ class UnitGaussianNormalizer(object):
         x = (x * std) + mean
         return x
 
-    def cuda(self):
-        self.mean = self.mean.cuda()
-        self.std = self.std.cuda()
+    def xpu(self):
+        self.mean = self.mean.to('xpu')
+        self.std = self.std.to('xpu')
 
     def cpu(self):
         self.mean = self.mean.cpu()
@@ -310,9 +310,9 @@ class GaussianNormalizer(object):
         x = (x * (self.std + self.eps)) + self.mean
         return x
 
-    def cuda(self):
-        self.mean = self.mean.cuda()
-        self.std = self.std.cuda()
+    def xpu(self):
+        self.mean = self.mean.to('xpu')
+        self.std = self.std.to('xpu')
 
     def cpu(self):
         self.mean = self.mean.cpu()

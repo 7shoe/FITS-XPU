@@ -1,4 +1,4 @@
-export CUDA_VISIBLE_DEVICES=4
+export ZE_AFFINITY_MASK=4
 if [ ! -d "./logs" ]; then
     mkdir ./logs
 fi

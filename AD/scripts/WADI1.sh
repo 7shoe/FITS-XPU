@@ -1,4 +1,4 @@
-# export CUDA_VISIBLE_DEVICES=0
+# export ZE_AFFINITY_MASK=0
 if [ ! -d "./logs" ]; then
     mkdir ./logs
 fi
@@ -41,4 +41,3 @@ done
 # python main.py --anormly_ratio 10 --num_epochs 10       --batch_size 64     --mode test    --dataset WADI   --data_path dataset/WADI  --input_c 55    --output_c 55  --pretrained_model 20  --win_size 200 --DSR $dsr --lr 5e-4 >logs/ft_WADI/testing_ar10_bs64_win200_ds2.log
 # python main.py --anormly_ratio 11 --num_epochs 10       --batch_size 64     --mode test    --dataset WADI   --data_path dataset/WADI  --input_c 55    --output_c 55  --pretrained_model 20  --win_size 200 --DSR $dsr --lr 5e-4 >logs/ft_WADI/testing_ar11_bs64_win200_ds2.log
 # python main.py --anormly_ratio 13 --num_epochs 10       --batch_size 64     --mode test    --dataset WADI   --data_path dataset/WADI  --input_c 55    --output_c 55  --pretrained_model 20  --win_size 200 --DSR $dsr --lr 5e-4 >logs/ft_WADI/testing_ar13_bs64_win200_ds2.log
-

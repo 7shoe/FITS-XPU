@@ -1,6 +1,7 @@
 import os
 import torch
 import numpy as np
+from utils.device import get_device, xpu_is_available
 
 
 class Exp_Basic(object):
@@ -14,11 +15,9 @@ class Exp_Basic(object):
         return None
 
     def _acquire_device(self):
-        if self.args.use_gpu:
-            os.environ["CUDA_VISIBLE_DEVICES"] = str(
-                self.args.gpu) if not self.args.use_multi_gpu else self.args.devices
-            device = torch.device('cuda:{}'.format(self.args.gpu))
-            print('Use GPU: cuda:{}'.format(self.args.gpu))
+        if self.args.use_gpu and xpu_is_available():
+            device = get_device(self.args.gpu)
+            print('Use XPU: xpu:{}'.format(self.args.gpu))
         else:
             device = torch.device('cpu')
             print('Use CPU')

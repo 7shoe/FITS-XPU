@@ -1,4 +1,4 @@
-# export CUDA_VISIBLE_DEVICES=0
+# export ZE_AFFINITY_MASK=0
 if [ ! -d "./logs" ]; then
     mkdir ./logs
 fi

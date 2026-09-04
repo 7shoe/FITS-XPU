@@ -1,6 +1,6 @@
-# export CUDA_VISIBLE_DEVICES=0
+# export ZE_AFFINITY_MASK=0
 
-# export CUDA_VISIBLE_DEVICES=0
+# export ZE_AFFINITY_MASK=0
 if [ ! -d "./logs" ]; then
     mkdir ./logs
 fi
@@ -48,6 +48,5 @@ done
 # python main.py --anormly_ratio 10  --num_epochs 10        --batch_size 64     --mode test    --dataset SMAP   --data_path dataset/SMAP  --input_c 25    --output_c 25  --pretrained_model 20 --win_size 200 >logs/fixed_SMAP/testing_ar10_bs64_win200_ds4.log
 # python main.py --anormly_ratio 11  --num_epochs 10        --batch_size 64     --mode test    --dataset SMAP   --data_path dataset/SMAP  --input_c 25    --output_c 25  --pretrained_model 20 --win_size 200 >logs/fixed_SMAP/testing_ar11_bs64_win200_ds4.log
 # python main.py --anormly_ratio 15  --num_epochs 10        --batch_size 64     --mode test    --dataset SMAP   --data_path dataset/SMAP  --input_c 25    --output_c 25  --pretrained_model 20 --win_size 200 >logs/fixed_SMAP/testing_ar15_bs64_win200_ds4.log
-
 
 

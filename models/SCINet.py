@@ -327,7 +327,7 @@ class Model(nn.Module):
     
     def get_position_encoding(self, x):
         max_length = x.size()[1]
-        position = torch.arange(max_length, dtype=torch.float32, device=x.device)  # tensor([0., 1., 2., 3., 4.], device='cuda:0')
+        position = torch.arange(max_length, dtype=torch.float32, device=x.device)
         temp1 = position.unsqueeze(1)  # 5 1
         temp2 = self.inv_timescales.unsqueeze(0)  # 1 256
         scaled_time = position.unsqueeze(1) * self.inv_timescales.unsqueeze(0)  # 5 256
@@ -370,7 +370,7 @@ class Model(nn.Module):
         else:
             x = x.permute(0,2,1)
             for div_projection in self.div_projection:
-                output = torch.zeros(x.shape,dtype=x.dtype).cuda()
+                output = torch.zeros(x.shape, dtype=x.dtype, device=x.device)
                 for i, div_layer in enumerate(div_projection):
                     div_x = x[:,:,i*self.div_len:min(i*self.div_len+self.overlap_len,self.input_len)]
                     output[:,:,i*self.div_len:(i+1)*self.div_len] = div_layer(div_x)
@@ -419,7 +419,7 @@ class Model(nn.Module):
 
 def get_variable(x):
     x = Variable(x)
-    return x.cuda() if torch.cuda.is_available() else x
+    return x.to('xpu') if getattr(torch, 'xpu', None) and torch.xpu.is_available() else x
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
@@ -440,9 +440,10 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
 
+    device = torch.device('xpu' if getattr(torch, 'xpu', None) and torch.xpu.is_available() else 'cpu')
     model = SCINet(output_len = args.horizon, input_len= args.window_size, input_dim = 9, hid_size = args.hidden_size, num_stacks = 1,
                 num_levels = 3, concat_len = 0, groups = args.groups, kernel = args.kernel, dropout = args.dropout,
-                 single_step_output_One = args.single_step_output_One, positionalE =  args.positionalEcoding, modified = True).cuda()
-    x = torch.randn(32, 96, 9).cuda()
+                 single_step_output_One = args.single_step_output_One, positionalE =  args.positionalEcoding, modified = True).to(device)
+    x = torch.randn(32, 96, 9, device=device)
     y = model(x)
     print(y.shape)

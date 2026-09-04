@@ -4,6 +4,7 @@ import torch
 from exp.exp_main_F import Exp_Main
 import random
 import numpy as np
+from utils.device import empty_cache, xpu_is_available
 
 
 
@@ -78,11 +79,11 @@ parser.add_argument('--loss', type=str, default='mse', help='loss function')
 parser.add_argument('--lradj', type=str, default='type3', help='adjust learning rate')
 parser.add_argument('--use_amp', action='store_true', help='use automatic mixed precision training', default=False)
 
-# GPU
-parser.add_argument('--use_gpu', type=bool, default=True, help='use gpu')
-parser.add_argument('--gpu', type=int, default=0, help='gpu')
-parser.add_argument('--use_multi_gpu', action='store_true', help='use multiple gpus', default=False)
-parser.add_argument('--devices', type=str, default='0,1,2,3', help='device ids of multile gpus')
+# XPU (legacy option names are retained for existing scripts)
+parser.add_argument('--use_gpu', type=bool, default=True, help='use xpu')
+parser.add_argument('--gpu', type=int, default=0, help='xpu')
+parser.add_argument('--use_multi_gpu', action='store_true', help='use multiple xpus', default=False)
+parser.add_argument('--devices', type=str, default='0,1,2,3', help='device ids of multiple xpus')
 parser.add_argument('--test_flop', action='store_true', default=False, help='See utils/tools for usage')
 
 # Augmentation
@@ -107,7 +108,7 @@ parser.add_argument('--H_order', type=int,default=2)
 
 args = parser.parse_args()
 
-args.use_gpu = True if torch.cuda.is_available() and args.use_gpu else False
+args.use_gpu = True if xpu_is_available() and args.use_gpu else False
 
 if args.cut_freq == 0:
     args.cut_freq = int(args.seq_len // args.base_T + 1) * args.H_order + 10
@@ -132,7 +133,7 @@ if args.use_gpu and args.use_multi_gpu:
 print('Args in experiment:')
 print(args)
 
-torch.cuda.empty_cache()
+empty_cache()
 
 Exp = Exp_Main
 
@@ -166,7 +167,7 @@ if args.is_training:
             print('>>>>>>>predicting : {}<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<'.format(setting))
             exp.predict(setting, True)
 
-        torch.cuda.empty_cache()
+        empty_cache()
 else:
     ii = 0
     setting = '{}_{}_{}_ft{}_sl{}_ll{}_pl{}_H{}_{}'.format(
@@ -182,4 +183,4 @@ else:
     exp = Exp(args)  # set experiments
     print('>>>>>>>testing : {}<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<'.format(setting))
     exp.test(setting, test=1)
-    torch.cuda.empty_cache()
+    empty_cache()

@@ -17,7 +17,7 @@ class BatchAugmentation():
     def freq_mask(self,x, y, rate=0.5, dim=1):
         xy = torch.cat([x,y],dim=1)
         xy_f = torch.fft.rfft(xy,dim=dim)
-        m = torch.cuda.FloatTensor(xy_f.shape).uniform_() < rate
+        m = torch.rand(xy_f.shape, device=xy_f.device) < rate
         freal = xy_f.real.masked_fill(m,0)
         fimag = xy_f.imag.masked_fill(m,0)
         xy_f = torch.complex(freal,fimag)
@@ -28,7 +28,7 @@ class BatchAugmentation():
         xy = torch.cat([x,y],dim=dim)
         xy_f = torch.fft.rfft(xy,dim=dim)
         
-        m = torch.cuda.FloatTensor(xy_f.shape).uniform_() < rate
+        m = torch.rand(xy_f.shape, device=xy_f.device) < rate
         amp = abs(xy_f)
         _,index = amp.sort(dim=dim, descending=True)
         dominant_mask = index > 2
@@ -55,13 +55,13 @@ class BatchAugmentation():
         return xy
     def noise(self,x,y,rate=0.05,dim=1):
         xy = torch.cat([x,y],dim=1)
-        noise_xy = (torch.rand(xy.shape)-0.5) * 0.1
-        xy = xy + noise_xy.cuda()
+        noise_xy = (torch.rand(xy.shape, device=xy.device)-0.5) * 0.1
+        xy = xy + noise_xy
         return xy
 
     def noise_input(self,x,y,rate=0.05,dim=1):
-        noise = (torch.rand(x.shape)-0.5) * 0.1
-        x = x + noise.cuda()
+        noise = (torch.rand(x.shape, device=x.device)-0.5) * 0.1
+        x = x + noise
         xy = torch.cat([x,y],dim=1)
         return xy
     

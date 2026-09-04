@@ -10,8 +10,6 @@ from model.FITS import Model
 from data_factory.data_loader import get_loader_segment
 import matplotlib.pyplot as plt
 
-from thop import profile
-
 class DotDict(dict):
     """
     a dictionary that supports dot notation 
@@ -98,8 +96,8 @@ class Solver(object):
                                               mode='thre',
                                               dataset=self.dataset)
 
+        self.device = torch.device("xpu:0" if getattr(torch, "xpu", None) and torch.xpu.is_available() else "cpu")
         self.build_model()
-        self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
         self.criterion = nn.MSELoss()
 
     def build_model(self):
@@ -107,8 +105,7 @@ class Solver(object):
         self.optimizer = torch.optim.Adam(self.model.parameters(), lr=self.lr)
         print(self.model)
 
-        if torch.cuda.is_available():
-            self.model.cuda()
+        self.model.to(self.device)
 
     # def _get_profile(self, model):
     #     _input=torch.randn(1, self.win_size//self.DSR, self.input_c).to(self.device)

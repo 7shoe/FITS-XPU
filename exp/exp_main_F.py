@@ -16,8 +16,6 @@ import warnings
 import matplotlib.pyplot as plt
 import numpy as np
 
-from thop import profile
-
 warnings.filterwarnings('ignore')
 
 class Exp_Main(Exp_Basic):
@@ -59,6 +57,13 @@ class Exp_Main(Exp_Basic):
         return criterion
 
     def _get_profile(self, model):
+        try:
+            from thop import profile
+        except ImportError as exc:
+            raise RuntimeError(
+                "THOP is an optional profiling dependency; install it to use "
+                "_get_profile()."
+            ) from exc
         _input=torch.randn(self.args.batch_size, self.args.seq_len, self.args.enc_in).to(self.device)
         macs, params = profile(model, inputs=(_input,))
         print('FLOPs: ', macs)
