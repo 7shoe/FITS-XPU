@@ -297,6 +297,7 @@ def main():
     parser.add_argument("datasets", nargs="+")
     parser.add_argument("--horizons", required=True, help="comma-separated horizons")
     parser.add_argument("--seeds", required=True, help="comma-separated seeds")
+    parser.add_argument("--task-kind", choices=("benchmark", "pretrain"), default="benchmark")
     args = parser.parse_args()
     args.horizons = parse_list(args.horizons, int)
     args.seeds = parse_list(args.seeds, int)
@@ -332,7 +333,7 @@ def main():
     logs_root = Path(os.environ.get("MODEL_LOGS_ROOT", str(repo_root / "logs"))).expanduser()
     if not logs_root.is_absolute():
         logs_root = repo_root / logs_root
-    run_dir = logs_root / args.model / "aurora" / "benchmark_runs" / run_id
+    run_dir = logs_root / args.model / "aurora" / ("pretrain_runs" if args.task_kind == "pretrain" else "benchmark_runs") / run_id
     run_dir.mkdir(parents=True, exist_ok=False)
     attempts_dir = run_dir / "attempt_logs"
     attempts_dir.mkdir()
@@ -347,6 +348,7 @@ def main():
 
     manifest = {
         "run_id": run_id,
+        "task_kind": args.task_kind,
         "created_utc": utc_now(),
         "host": socket.gethostname(),
         "pbs_jobid": os.environ.get("PBS_JOBID"),
@@ -580,6 +582,11 @@ def main():
                             "printf 'DRY RUN tile=%s task=%s\\n' \"$MODEL_ZE_AFFINITY_MASK\" \"$1\"; sleep \"$2\"",
                             "_", task.task_id, dry_run_seconds,
                         ]
+                elif args.task_kind == "pretrain":
+                    command = [
+                        "bash", "scripts/run_pretrain_worker.sh", args.model,
+                        task.dataset, str(task.horizon), str(task.seed),
+                    ]
                 else:
                     command = [
                         "bash", "scripts/launch_model.sh", args.model, args.action,
