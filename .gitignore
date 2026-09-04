@@ -53,6 +53,7 @@ cover/
 
 # Aurora/PBS smoke-test output
 artifacts/aurora_smoke/
+artifacts/aurora_ddp_smoke/
 
 # Translations
 *.mo

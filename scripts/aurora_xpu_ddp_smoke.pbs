@@ -1,0 +1,79 @@
+#!/bin/bash -l
+#PBS -A EpiCalib
+#PBS -q debug
+#PBS -l select=1
+#PBS -l place=scatter
+#PBS -l walltime=00:10:00
+#PBS -l filesystems=home:flare
+#PBS -N fits_xpu_ddp
+#PBS -j oe
+#PBS -k doe
+#PBS -o /home/siebenschuh/Projects/github_projects/FITS/artifacts/aurora_ddp_smoke/
+
+module load frameworks
+set -euo pipefail
+cd /home/siebenschuh/Projects/github_projects/FITS
+
+export INTELGT_AUTO_ATTACH_DISABLE=1
+export ZE_FLAT_DEVICE_HIERARCHY=FLAT
+unset ZE_AFFINITY_MASK
+export OMP_NUM_THREADS=4
+export FITS_DDP_SMOKE_OUT="$PWD/artifacts/aurora_ddp_smoke"
+
+mkdir -p "$FITS_DDP_SMOKE_OUT"
+TAG="${PBS_JOBID%%.*}"
+DATA_ROOT="$FITS_DDP_SMOKE_OUT/$TAG/data"
+CHECKPOINT_ROOT="$FITS_DDP_SMOKE_OUT/$TAG/checkpoints"
+python -u scripts/make_smoke_dataset.py "$DATA_ROOT/synthetic.csv" --rows 720
+
+echo "[ddp-smoke] host=$(hostname) job=$TAG"
+python -c "import torch; print('torch', torch.__version__, '| xpu', torch.xpu.is_available(), torch.xpu.device_count())"
+
+export MASTER_ADDR="$(hostname | cut -d. -f1).hsn.cm.aurora.alcf.anl.gov"
+export MASTER_PORT=$((20000 + TAG % 20000))
+
+echo "[ddp-smoke] ---- two-tile complex-gradient gate ----"
+mpiexec --pmi=pmix --envall -n 2 --ppn 2 \
+    --cpu-bind=verbose,list:4-7:8-11 \
+    python -u -m scripts.aurora_xpu_ddp_smoke
+
+echo "[ddp-smoke] ---- twelve-tile training integration ----"
+export MASTER_PORT=$((22000 + TAG % 20000))
+export CPU_BIND="verbose,list:4-7:8-11:12-15:16-19:20-23:24-27:56-59:60-63:64-67:68-71:72-75:76-79"
+mpiexec --pmi=pmix --envall -n 12 --ppn 12 \
+    --cpu-bind=${CPU_BIND} \
+    python -u run_longExp_F.py \
+      --distributed \
+      --is_training 1 \
+      --model_id aurora_ddp_smoke \
+      --model FITS \
+      --data custom \
+      --root_path "$DATA_ROOT/" \
+      --data_path synthetic.csv \
+      --features M \
+      --seq_len 24 \
+      --label_len 12 \
+      --pred_len 6 \
+      --enc_in 3 \
+      --cut_freq 8 \
+      --train_mode 0 \
+      --train_epochs 2 \
+      --patience 2 \
+      --itr 1 \
+      --batch_size 12 \
+      --ddp_num_workers 0 \
+      --learning_rate 0.001 \
+      --checkpoints "$CHECKPOINT_ROOT"
+
+CHECKPOINT="$CHECKPOINT_ROOT/aurora_ddp_smoke_FITS_custom_ftM_sl24_ll12_pl6_H2_0/checkpoint.pth"
+python - "$CHECKPOINT" <<'PY'
+import sys
+import torch
+
+state = torch.load(sys.argv[1], map_location='cpu', weights_only=True)
+assert state
+assert not any(key.startswith('module.') for key in state)
+print('[ddp-smoke] standalone checkpoint inspection: PASS', sorted(state))
+PY
+
+echo "AURORA XPU DDP SMOKE: PASS"

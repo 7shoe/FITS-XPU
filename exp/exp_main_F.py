@@ -3,6 +3,8 @@ from exp.exp_basic import Exp_Basic
 from models import Informer, Autoformer, Transformer, DLinear, Linear, NLinear, SCINet, Film, FITS, Real_FITS
 from utils.tools import EarlyStopping, adjust_learning_rate, visual, test_params_flop
 from utils.metrics import metric
+from utils.distributed import (DistributedContext, barrier, broadcast_bool,
+                               reduce_sum_count, unwrap_model)
 
 import numpy as np
 import torch
@@ -21,6 +23,18 @@ warnings.filterwarnings('ignore')
 class Exp_Main(Exp_Basic):
     def __init__(self, args):
         super(Exp_Main, self).__init__(args)
+        self.distributed_context = getattr(
+            args, 'distributed_context', DistributedContext()
+        )
+        if self.distributed_context.enabled:
+            from torch.nn.parallel import DistributedDataParallel
+
+            # Aurora's one-rank-per-tile path moves the model first and wraps it
+            # second. The reverse order is only required for multi-CCS sharing.
+            self.model = DistributedDataParallel(self.model)
+            # Model parameters have now been broadcast from rank zero. Give
+            # stochastic layers a reproducible, rank-local random stream.
+            torch.manual_seed(self.args.seed + self.args.rank)
 
     def _build_model(self):
         model_dict = {
@@ -37,9 +51,6 @@ class Exp_Main(Exp_Basic):
         }
         model = model_dict[self.args.model].Model(self.args).float()
 
-        if self.args.use_multi_gpu and self.args.use_gpu:
-            model = nn.DataParallel(model, device_ids=self.args.device_ids)
-        
         return model
 
     def _get_data(self, flag):
@@ -48,8 +59,9 @@ class Exp_Main(Exp_Basic):
 
     def _select_optimizer(self):
         model_optim = optim.Adam(self.model.parameters(), lr=self.args.learning_rate)
-        print('!!!!!!!!!!!!!!learning rate!!!!!!!!!!!!!!!')
-        print(self.args.learning_rate)
+        if self.distributed_context.is_main:
+            print('!!!!!!!!!!!!!!learning rate!!!!!!!!!!!!!!!')
+            print(self.args.learning_rate)
         return model_optim
 
     def _select_criterion(self):
@@ -71,8 +83,14 @@ class Exp_Main(Exp_Basic):
         return macs, params
 
     def vali(self, vali_data, vali_loader, criterion):
-        total_loss = []
+        total_squared_error = 0.0
+        total_elements = 0
         self.model.eval()
+        evaluation_model = (
+            unwrap_model(self.model)
+            if self.distributed_context.enabled
+            else self.model
+        )
         with torch.no_grad():
             for i, (batch_x, batch_y, batch_x_mark, batch_y_mark) in enumerate(vali_loader):
                 batch_x = batch_x.float().to(self.device)
@@ -87,41 +105,53 @@ class Exp_Main(Exp_Basic):
                 dec_inp = torch.cat([batch_y[:, :self.args.label_len, :], dec_inp], dim=1).float().to(self.device)
                 # encoder - decoder
                 if 'FITS' in self.args.model:
-                    outputs, low = self.model(batch_x)
+                    outputs, low = evaluation_model(batch_x)
                 elif 'SCINet' in self.args.model:
-                    outputs = self.model(batch_x)
+                    outputs = evaluation_model(batch_x)
                 else:
                     if self.args.output_attention:
-                        outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)[0]
+                        outputs = evaluation_model(batch_x, batch_x_mark, dec_inp, batch_y_mark)[0]
                     else:
-                        outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)
+                        outputs = evaluation_model(batch_x, batch_x_mark, dec_inp, batch_y_mark)
                 f_dim = -1 if self.args.features == 'MS' else 0
                 outputs = outputs[:, -self.args.pred_len:, f_dim:]
                 batch_y = batch_y[:, -self.args.pred_len:, f_dim:]
 
-                pred = outputs.detach().cpu()
-                true = batch_y.detach().cpu()
+                squared_error = torch.sum((outputs - batch_y) ** 2)
+                total_squared_error += float(squared_error.item())
+                total_elements += batch_y.numel()
 
-                loss = criterion(pred, true)
-
-                total_loss.append(loss)
-        total_loss = np.average(total_loss)
+        total_squared_error, total_elements = reduce_sum_count(
+            total_squared_error,
+            total_elements,
+            self.device,
+            self.distributed_context,
+        )
+        if total_elements == 0:
+            raise RuntimeError('validation split contains no elements')
+        total_loss = total_squared_error / total_elements
         self.model.train()
         return total_loss
 
     def train(self, setting, ft=False):
         train_data, train_loader = self._get_data(flag='train')
         vali_data, vali_loader = self._get_data(flag='val')
-        print(self.model)
-        print('Trainable parameters: ', sum(p.numel() for p in self.model.parameters() if p.requires_grad))
+        if self.distributed_context.is_main:
+            print(self.model)
+            print('Trainable parameters: ', sum(p.numel() for p in self.model.parameters() if p.requires_grad))
 
         path = os.path.join(self.args.checkpoints, setting)
-        if not os.path.exists(path):
-            os.makedirs(path)
+        if self.distributed_context.is_main:
+            os.makedirs(path, exist_ok=True)
+        barrier(self.distributed_context)
 
         time_now = time.time()
 
         train_steps = len(train_loader)
+        if train_steps == 0:
+            raise RuntimeError(
+                'training produced zero batches on rank {}'.format(self.args.rank)
+            )
         early_stopping = EarlyStopping(patience=self.args.patience, verbose=True)
 
         model_optim = self._select_optimizer()
@@ -129,10 +159,13 @@ class Exp_Main(Exp_Basic):
 
         for epoch in range(self.args.train_epochs):
             iter_count = 0
-            train_loss = []
+            train_squared_error = 0.0
+            train_elements = 0
 
             self.model.train()
             epoch_time = time.time()
+            if hasattr(train_loader.sampler, 'set_epoch'):
+                train_loader.sampler.set_epoch(epoch)
             if self.args.in_dataset_augmentation:
                 train_loader.dataset.regenerate_augmentation_data()
 
@@ -190,9 +223,10 @@ class Exp_Main(Exp_Basic):
                     outputs = outputs[:, :, f_dim:]
                     # batch_y = batch_y[:, -self.args.pred_len:, f_dim:].to(self.device) #???
                     loss = criterion(outputs, batch_xy)
-                train_loss.append(loss.item())
+                train_squared_error += loss.item() * outputs.numel()
+                train_elements += outputs.numel()
 
-                if (i + 1) % 100 == 0:
+                if self.distributed_context.is_main and (i + 1) % 100 == 0:
                     print("\titers: {0}, epoch: {1} | loss: {2:.7f}".format(i + 1, epoch + 1, loss.item()))
                     speed = (time.time() - time_now) / iter_count
                     left_time = speed * ((self.args.train_epochs - epoch) * train_steps - i)
@@ -203,21 +237,48 @@ class Exp_Main(Exp_Basic):
                 loss.backward()
                 model_optim.step()
 
-            print("Epoch: {} cost time: {}".format(epoch + 1, time.time() - epoch_time))
-            train_loss = np.average(train_loss)
+            train_squared_error, train_elements = reduce_sum_count(
+                train_squared_error,
+                train_elements,
+                self.device,
+                self.distributed_context,
+            )
+            if train_elements == 0:
+                raise RuntimeError('training epoch contains no elements')
+            train_loss = train_squared_error / train_elements
             vali_loss = self.vali(vali_data, vali_loader, criterion)
 
-            print("Epoch: {0}, Steps: {1} | Train Loss: {2:.7f} Vali Loss: {3:.7f}".format(
-                epoch + 1, train_steps, train_loss, vali_loss))
-            early_stopping(vali_loss, self.model, path)
-            if early_stopping.early_stop:
-                print("Early stopping")
+            stop = False
+            if self.distributed_context.is_main:
+                print("Epoch: {} cost time: {}".format(epoch + 1, time.time() - epoch_time))
+                print("Epoch: {0}, Steps/rank: {1} | Train Loss: {2:.7f} Vali Loss: {3:.7f}".format(
+                    epoch + 1, train_steps, train_loss, vali_loss))
+                early_stopping(
+                    vali_loss, unwrap_model(self.model), path
+                )
+                stop = early_stopping.early_stop
+            stop = broadcast_bool(
+                stop, self.device, self.distributed_context, src=0
+            )
+            if stop:
+                if self.distributed_context.is_main:
+                    print("Early stopping")
                 break
 
-            adjust_learning_rate(model_optim, epoch + 1, self.args)
+            adjust_learning_rate(
+                model_optim,
+                epoch + 1,
+                self.args,
+                verbose=self.distributed_context.is_main,
+            )
 
         best_model_path = path + '/' + 'checkpoint.pth'
-        self.model.load_state_dict(torch.load(best_model_path))
+        barrier(self.distributed_context)
+        state = torch.load(
+            best_model_path, map_location=self.device, weights_only=True
+        )
+        unwrap_model(self.model).load_state_dict(state)
+        barrier(self.distributed_context)
 
         return self.model
 
@@ -226,7 +287,12 @@ class Exp_Main(Exp_Basic):
         
         if test:
             print('loading model')
-            self.model.load_state_dict(torch.load(os.path.join('./checkpoints/' + setting, 'checkpoint.pth')))
+            checkpoint = os.path.join(
+                self.args.checkpoints, setting, 'checkpoint.pth'
+            )
+            unwrap_model(self.model).load_state_dict(
+                torch.load(checkpoint, map_location=self.device, weights_only=True)
+            )
 
         preds = []
         trues = []
@@ -294,6 +360,7 @@ class Exp_Main(Exp_Basic):
             exit()
         preds = np.concatenate(preds, axis=0)
         trues = np.concatenate(trues, axis=0)
+        inputx = np.concatenate(inputx, axis=0)
         # inputx = np.array(inputx)
         # reconx = np.array(reconx)
         # reconxy = np.array(reconxy)
@@ -361,7 +428,9 @@ class Exp_Main(Exp_Basic):
         if load:
             path = os.path.join(self.args.checkpoints, setting)
             best_model_path = path + '/' + 'checkpoint.pth'
-            self.model.load_state_dict(torch.load(best_model_path))
+            unwrap_model(self.model).load_state_dict(
+                torch.load(best_model_path, map_location=self.device, weights_only=True)
+            )
 
         preds = []
 

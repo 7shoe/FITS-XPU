@@ -55,7 +55,8 @@ class Exp_Main(Exp_Basic):
         return criterion
 
     def vali(self, vali_data, vali_loader, criterion):
-        total_loss = []
+        total_squared_error = 0.0
+        total_elements = 0
         self.model.eval()
         with torch.no_grad():
             for i, (batch_x, batch_y, batch_x_mark, batch_y_mark) in enumerate(vali_loader):
@@ -82,13 +83,12 @@ class Exp_Main(Exp_Basic):
                 outputs = outputs[:, -self.args.pred_len:, f_dim:]
                 batch_y = batch_y[:, -self.args.pred_len:, f_dim:].to(self.device)
 
-                pred = outputs.detach().cpu()
-                true = batch_y.detach().cpu()
-
-                loss = criterion(pred, true)
-
-                total_loss.append(loss)
-        total_loss = np.average(total_loss)
+                squared_error = torch.sum((outputs - batch_y) ** 2)
+                total_squared_error += float(squared_error.item())
+                total_elements += batch_y.numel()
+        if total_elements == 0:
+            raise RuntimeError('validation split contains no elements')
+        total_loss = total_squared_error / total_elements
         self.model.train()
         return total_loss
 

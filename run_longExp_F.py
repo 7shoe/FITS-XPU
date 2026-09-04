@@ -5,7 +5,19 @@ from exp.exp_main_F import Exp_Main
 import random
 import numpy as np
 from utils.device import empty_cache, xpu_is_available
+from utils.distributed import (barrier, cleanup_distributed,
+                               initialize_distributed)
 
+
+def str_to_bool(value):
+    if isinstance(value, bool):
+        return value
+    normalized = value.lower()
+    if normalized in ('true', '1', 'yes', 'y'):
+        return True
+    if normalized in ('false', '0', 'no', 'n'):
+        return False
+    raise argparse.ArgumentTypeError('expected true or false')
 
 
 parser = argparse.ArgumentParser(description='Autoformer & Transformer family for Time Series Forecasting')
@@ -71,6 +83,8 @@ parser.add_argument('--stacks', type=int, default=1, help='1 stack or 2 stacks')
 
 # optimization
 parser.add_argument('--num_workers', type=int, default=10, help='data loader num workers')
+parser.add_argument('--ddp_num_workers', type=int, default=0,
+                    help='data loader workers per rank in distributed mode')
 parser.add_argument('--itr', type=int, default=2, help='experiments times')
 parser.add_argument('--train_epochs', type=int, default=50, help='train epochs')
 parser.add_argument('--batch_size', type=int, default=32, help='batch size of train input data')
@@ -82,10 +96,14 @@ parser.add_argument('--lradj', type=str, default='type3', help='adjust learning 
 parser.add_argument('--use_amp', action='store_true', help='use automatic mixed precision training', default=False)
 
 # XPU (legacy option names are retained for existing scripts)
-parser.add_argument('--use_gpu', type=bool, default=True, help='use xpu')
+parser.add_argument('--use_gpu', type=str_to_bool, default=True, help='use xpu')
 parser.add_argument('--gpu', type=int, default=0, help='xpu')
-parser.add_argument('--use_multi_gpu', action='store_true', help='use multiple xpus', default=False)
-parser.add_argument('--devices', type=str, default='0,1,2,3', help='device ids of multiple xpus')
+parser.add_argument('--distributed', action='store_true',
+                    help='use one XCCL/DDP process per XPU tile')
+parser.add_argument('--use_multi_gpu', action='store_true',
+                    help='deprecated alias for --distributed', default=False)
+parser.add_argument('--devices', type=str, default='0,1,2,3',
+                    help='legacy DataParallel option; ignored by DDP')
 parser.add_argument('--test_flop', action='store_true', default=False, help='See utils/tools for usage')
 
 # Augmentation
@@ -100,7 +118,7 @@ parser.add_argument('--seed', type=int, default=2021, help='size of augmented da
 
 # continue learning
 parser.add_argument('--testset_div', type=int, default=2, help='Division of dataset')
-parser.add_argument('--test_time_train', type=bool, default=False, help='Affect data division')
+parser.add_argument('--test_time_train', type=str_to_bool, default=False, help='Affect data division')
 
 # FLinear
 parser.add_argument('--train_mode', type=int,default=0)
@@ -111,14 +129,21 @@ parser.add_argument('--H_order', type=int,default=2)
 args = parser.parse_args()
 
 args.use_gpu = True if xpu_is_available() and args.use_gpu else False
+args.distributed = bool(args.distributed or args.use_multi_gpu)
+
+if args.distributed and not args.is_training:
+    parser.error('distributed mode is training-only; evaluate the checkpoint separately')
+if args.distributed and (args.run_test or args.do_predict):
+    parser.error('--run_test and --do_predict are not allowed in distributed mode')
+if args.distributed and args.in_dataset_augmentation:
+    parser.error('dataset-regeneration augmentation is not yet rank-safe under DDP')
+if args.distributed and args.model not in ('FITS', 'Real_FITS'):
+    parser.error('distributed mode is currently validated only for FITS and Real_FITS')
+if args.ddp_num_workers < 0:
+    parser.error('--ddp_num_workers must be non-negative')
 
 if args.cut_freq == 0:
     args.cut_freq = int(args.seq_len // args.base_T + 1) * args.H_order + 10
-
-fix_seed = args.seed
-random.seed(fix_seed)
-torch.manual_seed(fix_seed)
-np.random.seed(fix_seed)
 
 if (not args.in_batch_augmentation) and (not args.in_dataset_augmentation):
     args.batch_size = args.batch_size * 2 
@@ -126,64 +151,109 @@ if (not args.in_batch_augmentation) and (not args.in_dataset_augmentation):
 if 'noise' in args.aug_method:
     args.batch_size = args.batch_size * 2 
 
-if args.use_gpu and args.use_multi_gpu:
-    args.dvices = args.devices.replace(' ', '')
-    device_ids = args.devices.split(',')
-    args.device_ids = [int(id_) for id_ in device_ids]
-    args.gpu = args.device_ids[0]
+distributed_context = None
+try:
+    distributed_context = initialize_distributed(
+        args.distributed, use_accelerator=args.use_gpu
+    )
+    args.distributed_context = distributed_context
+    args.rank = distributed_context.rank
+    args.world_size = distributed_context.world_size
+    args.local_rank = distributed_context.local_rank
 
-print('Args in experiment:')
-print(args)
+    if distributed_context.enabled:
+        args.gpu = distributed_context.local_rank
+        args.global_batch_size = args.batch_size
+        if args.global_batch_size < args.world_size:
+            raise ValueError(
+                'global batch size {} is smaller than world size {}'.format(
+                    args.global_batch_size, args.world_size
+                )
+            )
+        if args.global_batch_size % args.world_size:
+            raise ValueError(
+                'global batch size {} must be divisible by world size {}'.format(
+                    args.global_batch_size, args.world_size
+                )
+            )
+        args.batch_size = args.global_batch_size // args.world_size
+        args.num_workers = args.ddp_num_workers
+    else:
+        args.global_batch_size = args.batch_size
 
-empty_cache()
+    # Bind the rank's device before touching accelerator random generators.
+    fix_seed = args.seed
+    random.seed(fix_seed)
+    torch.manual_seed(fix_seed)
+    np.random.seed(fix_seed)
 
-Exp = Exp_Main
+    if distributed_context.is_main:
+        print('Args in experiment:')
+        print(args)
+        if distributed_context.enabled:
+            print(
+                'DDP topology: world={}, backend={}, global batch={}, '
+                'local batch={}, workers/rank={}'.format(
+                    args.world_size,
+                    distributed_context.backend,
+                    args.global_batch_size,
+                    args.batch_size,
+                    args.num_workers,
+                )
+            )
 
-if args.is_training:
-    for ii in range(args.itr):
-        # setting record of experiments
-        setting = '{}_{}_{}_ft{}_sl{}_ll{}_pl{}_H{}_{}'.format(
-            args.model_id,
-            args.model,
-            args.data,
-            args.features,
-            args.seq_len,
-            args.label_len,
-            args.pred_len,
-            args.H_order, ii)
-
-        exp = Exp(args)  # set experiments
-        print('>>>>>>>start training : {}>>>>>>>>>>>>>>>>>>>>>>>>>>'.format(setting))
-        if args.train_mode == 0:
-            exp.train(setting, ft=False) # train on xy
-        elif args.train_mode == 1:
-            exp.train(setting, ft=True) # train on y
-        elif args.train_mode == 2:
-            exp.train(setting, ft=False)
-            exp.train(setting, ft=True) # finetune
-
-        if args.run_test:
-            print('>>>>>>>testing : {}<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<'.format(setting))
-            exp.test(setting)
-
-        if args.do_predict:
-            print('>>>>>>>predicting : {}<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<'.format(setting))
-            exp.predict(setting, True)
-
-        empty_cache()
-else:
-    ii = 0
-    setting = '{}_{}_{}_ft{}_sl{}_ll{}_pl{}_H{}_{}'.format(
-            args.model_id,
-            args.model,
-            args.data,
-            args.features,
-            args.seq_len,
-            args.label_len,
-            args.pred_len,
-            args.H_order, ii)
-
-    exp = Exp(args)  # set experiments
-    print('>>>>>>>testing : {}<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<'.format(setting))
-    exp.test(setting, test=1)
     empty_cache()
+    Exp = Exp_Main
+
+    if args.is_training:
+        for ii in range(args.itr):
+            setting = '{}_{}_{}_ft{}_sl{}_ll{}_pl{}_H{}_{}'.format(
+                args.model_id,
+                args.model,
+                args.data,
+                args.features,
+                args.seq_len,
+                args.label_len,
+                args.pred_len,
+                args.H_order, ii)
+
+            exp = Exp(args)
+            if distributed_context.is_main:
+                print('>>>>>>>start training : {}>>>>>>>>>>>>>>>>>>>>>>>>>>'.format(setting))
+            if args.train_mode == 0:
+                exp.train(setting, ft=False)
+            elif args.train_mode == 1:
+                exp.train(setting, ft=True)
+            elif args.train_mode == 2:
+                exp.train(setting, ft=False)
+                exp.train(setting, ft=True)
+
+            if args.run_test:
+                print('>>>>>>>testing : {}<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<'.format(setting))
+                exp.test(setting)
+
+            if args.do_predict:
+                print('>>>>>>>predicting : {}<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<'.format(setting))
+                exp.predict(setting, True)
+
+            empty_cache()
+            barrier(distributed_context)
+    else:
+        ii = 0
+        setting = '{}_{}_{}_ft{}_sl{}_ll{}_pl{}_H{}_{}'.format(
+                args.model_id,
+                args.model,
+                args.data,
+                args.features,
+                args.seq_len,
+                args.label_len,
+                args.pred_len,
+                args.H_order, ii)
+
+        exp = Exp(args)
+        print('>>>>>>>testing : {}<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<'.format(setting))
+        exp.test(setting, test=1)
+        empty_cache()
+finally:
+    if distributed_context is not None:
+        cleanup_distributed(distributed_context)

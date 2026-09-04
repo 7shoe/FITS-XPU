@@ -17,10 +17,11 @@ class Exp_Basic(object):
     def _acquire_device(self):
         if self.args.use_gpu and xpu_is_available():
             device = get_device(self.args.gpu)
-            print('Use XPU: xpu:{}'.format(self.args.gpu))
+            print('Rank {} uses XPU: xpu:{}'.format(
+                getattr(self.args, 'rank', 0), self.args.gpu))
         else:
             device = torch.device('cpu')
-            print('Use CPU')
+            print('Rank {} uses CPU'.format(getattr(self.args, 'rank', 0)))
         return device
 
     def _get_data(self):

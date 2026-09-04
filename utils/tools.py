@@ -2,11 +2,12 @@ import numpy as np
 import torch
 import matplotlib.pyplot as plt
 import time
+import os
 
 plt.switch_backend('agg')
 
 
-def adjust_learning_rate(optimizer, epoch, args):
+def adjust_learning_rate(optimizer, epoch, args, verbose=True):
     # lr = args.learning_rate * (0.2 ** (epoch // 2))
     if args.lradj == 'type1':
         lr_adjust = {epoch: args.learning_rate * (0.5 ** ((epoch - 1) // 1))}
@@ -29,7 +30,8 @@ def adjust_learning_rate(optimizer, epoch, args):
         lr = lr_adjust[epoch]
         for param_group in optimizer.param_groups:
             param_group['lr'] = lr
-        print('Updating learning rate to {}'.format(lr))
+        if verbose:
+            print('Updating learning rate to {}'.format(lr))
 
 
 class EarlyStopping:
@@ -60,7 +62,10 @@ class EarlyStopping:
     def save_checkpoint(self, val_loss, model, path):
         if self.verbose:
             print(f'Validation loss decreased ({self.val_loss_min:.6f} --> {val_loss:.6f}).  Saving model ...')
-        torch.save(model.state_dict(), path + '/' + 'checkpoint.pth')
+        checkpoint = path + '/' + 'checkpoint.pth'
+        temporary = checkpoint + '.tmp'
+        torch.save(model.state_dict(), temporary)
+        os.replace(temporary, checkpoint)
         self.val_loss_min = val_loss
 
 

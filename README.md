@@ -4,6 +4,39 @@ This is the official implementation of FITS. Please run the scripts in scripts\F
 
 See updates here: [Update](#update)
 
+## Aurora multi-tile training
+
+`run_longExp_F.py` supports single-node distributed training with one XCCL/DDP
+process per PyTorch-visible XPU tile. Aurora's default FLAT hierarchy exposes 12
+tiles per node:
+
+```bash
+module load frameworks
+export ZE_FLAT_DEVICE_HIERARCHY=FLAT
+unset ZE_AFFINITY_MASK
+export OMP_NUM_THREADS=4
+export MASTER_ADDR="$(hostname | cut -d. -f1).hsn.cm.aurora.alcf.anl.gov"
+export MASTER_PORT=29500
+export CPU_BIND="verbose,list:4-7:8-11:12-15:16-19:20-23:24-27:56-59:60-63:64-67:68-71:72-75:76-79"
+
+mpiexec --pmi=pmix --envall -n 12 --ppn 12 --cpu-bind=${CPU_BIND} \
+  python -u run_longExp_F.py --distributed --is_training 1 ...
+```
+
+Distributed mode currently supports `FITS` and `Real_FITS`, is training-only,
+and deliberately rejects test or prediction execution. Evaluate the saved
+rank-zero checkpoint later with an ordinary `--is_training 0` invocation.
+
+The runner's existing augmentation rules are applied to `--batch_size` first;
+the resulting value is the DDP **global** batch and must be divisible by the
+world size. The runner prints both global and per-rank values before training.
+`--ddp_num_workers` controls loader workers per rank and defaults to zero to
+avoid creating 120 workers on one node.
+
+Do not set a job-wide `ZE_AFFINITY_MASK` for this mode. Rank placement comes
+from `PALS_LOCAL_RANKID`, and ambiguous or incompatible launch configurations
+fail before model construction.
+
 ## Also see our exciting new work! 
 
 Wanna see something beyond FITS? Check: 
