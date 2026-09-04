@@ -21,14 +21,19 @@ args = parser.parse_args()
 
 output = Path(args.output).resolve()
 metric_files = sorted(
-    path for path in Path(args.search_root).glob("*_results/*/metrics.csv")
+    path for path in Path(args.search_root).glob("*_results/*/**/metrics.csv")
     if path.resolve() != output
 )
 rows = []
 fields = []
+seen_rows = set()
 for metric_file in metric_files:
     with metric_file.open(newline="") as handle:
         for row in csv.DictReader(handle):
+            row_key = tuple(sorted(row.items()))
+            if row_key in seen_rows:
+                continue
+            seen_rows.add(row_key)
             rows.append(row)
             for field in row:
                 if field not in fields:

@@ -19,3 +19,14 @@ def empty_cache():
     """Release cached XPU memory when the XPU backend is active."""
     if xpu_is_available():
         torch.xpu.empty_cache()
+
+
+def synchronize(index=None):
+    """Wait for submitted XPU work before normal interpreter teardown."""
+
+    if not xpu_is_available():
+        return
+    if index is None:
+        torch.xpu.synchronize()
+    else:
+        torch.xpu.synchronize(index)

@@ -86,7 +86,9 @@ same commands and aggregate their five reported MSE values.  Each model ID
 contains the seed, preventing checkpoint/result collisions present in the
 original shell scripts.
 
-The repository also provides the sequential batch form for all four horizons:
+The repository also provides the experiment-parallel batch form for all four
+horizons and five seeds. On an Aurora node it detects and uses the 12 flat XPU
+tiles, with one independent run per tile:
 
 ```bash
 bash scripts/launch_benchmark.sh FITS train ETTh1
@@ -94,6 +96,37 @@ bash scripts/launch_benchmark.sh FITS test ETTh1
 python scripts/merge_model_metrics.py
 python scripts/summarize_model_metrics.py
 ```
+
+For the complete isolated workflow—training, evaluation, and five-seed table
+generation—use the single reproduction wrapper:
+
+```bash
+bash scripts/FITS/aurora/run_full_reproduction.sh
+```
+
+It defaults to all seven datasets and stores everything under
+`.../TimeSeriesTraining/FITS_reproductions/parallel_reproduction_01/`. Re-run
+the command to resume successful settings, or set a new tag for a distinct
+comparison:
+
+```bash
+FITS_REPRO_TAG=parallel_reproduction_02 \
+  bash scripts/FITS/aurora/run_full_reproduction.sh
+```
+
+Use `train` or `test` as the first argument to run only one phase. Dataset
+arguments following the phase restrict the matrix, for example
+`run_full_reproduction.sh all ETTh1 ETTh2`.
+
+Use `MODEL_MAX_PARALLEL=1` for sequential execution or a smaller value such as
+6 for conservative commissioning. If unset, `MODEL_MAX_PARALLEL` is set to
+the number of detected flat XPU devices, giving one experiment per device.
+Pooled runs default to zero DataLoader
+workers per experiment, stagger XPU initialization, write scheduler evidence
+under `logs/FITS/aurora/benchmark_runs/`, and skip only runs that have a
+successful pool-era completion marker. Full controls and the `ze_peak`
+teardown contract are documented in
+[`docs/aurora_experiment_pool.md`](../../../docs/aurora_experiment_pool.md).
 
 ## Reproducibility boundary
 

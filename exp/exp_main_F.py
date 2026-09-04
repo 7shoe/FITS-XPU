@@ -5,6 +5,7 @@ from utils.tools import EarlyStopping, adjust_learning_rate, visual, test_params
 from utils.metrics import metric
 from utils.distributed import (DistributedContext, barrier, broadcast_bool,
                                reduce_sum_count, unwrap_model)
+from utils.graceful_shutdown import raise_if_requested
 
 import numpy as np
 import torch
@@ -94,6 +95,7 @@ class Exp_Main(Exp_Basic):
         )
         with torch.no_grad():
             for i, (batch_x, batch_y, batch_x_mark, batch_y_mark) in enumerate(vali_loader):
+                raise_if_requested()
                 batch_x = batch_x.float().to(self.device)
                 batch_y = batch_y.float().to(self.device)[:,-self.args.pred_len:,:]
                 batch_xy = torch.cat([batch_x, batch_y], dim=1)
@@ -121,6 +123,7 @@ class Exp_Main(Exp_Basic):
                 squared_error = torch.sum((outputs - batch_y) ** 2)
                 total_squared_error += float(squared_error.item())
                 total_elements += batch_y.numel()
+                raise_if_requested()
 
         total_squared_error, total_elements = reduce_sum_count(
             total_squared_error,
@@ -159,6 +162,7 @@ class Exp_Main(Exp_Basic):
         criterion = self._select_criterion()
 
         for epoch in range(self.args.train_epochs):
+            raise_if_requested()
             iter_count = 0
             train_squared_error = 0.0
             train_elements = 0
@@ -171,6 +175,7 @@ class Exp_Main(Exp_Basic):
                 train_loader.dataset.regenerate_augmentation_data()
 
             for i, (batch_x, batch_y, batch_x_mark, batch_y_mark) in enumerate(train_loader):
+                raise_if_requested()
                 iter_count += 1
                 model_optim.zero_grad()
 
@@ -237,6 +242,9 @@ class Exp_Main(Exp_Basic):
 
                 loss.backward()
                 model_optim.step()
+                # The optimizer step is a safe boundary: all work for this
+                # batch has been submitted and the next batch has not begun.
+                raise_if_requested()
 
             train_squared_error, train_elements = reduce_sum_count(
                 train_squared_error,
@@ -310,6 +318,7 @@ class Exp_Main(Exp_Basic):
         self.model.eval()
         with torch.no_grad():
             for i, (batch_x, batch_y, batch_x_mark, batch_y_mark) in enumerate(test_loader):
+                raise_if_requested()
                 batch_x = batch_x.float().to(self.device)
                 batch_y = batch_y.float().to(self.device)[:,-self.args.pred_len:,:]
                 batch_xy = torch.cat([batch_x, batch_y], dim=1).float().to(self.device)
@@ -351,6 +360,7 @@ class Exp_Main(Exp_Basic):
                 reconx.append(outputs[:, :-self.args.pred_len, f_dim:].detach().cpu().numpy())
                 reconxy.append(outputs.detach().cpu().numpy())
                 lows.append(low.detach().cpu().numpy())
+                raise_if_requested()
                 if i % 20 == 0:
                     input = batch_x.detach().cpu().numpy()
                     gt = np.concatenate((input[0, :, -1], true[0, :, -1]), axis=0)
@@ -411,10 +421,10 @@ class Exp_Main(Exp_Basic):
 
         mae, mse, rmse, mape, mspe, rse, corr = metric(preds, trues)
         print('mse:{}, mae:{}, rse:{}, corr:{}'.format(mse, mae, rse, corr))
-        metrics_path = os.path.join(results_root, 'metrics.csv')
-        os.makedirs(results_root, exist_ok=True)
-        needs_header = not os.path.exists(metrics_path)
-        with open(metrics_path, 'a', newline='') as metrics_file:
+        # One metrics file per setting avoids a shared append target when
+        # independent evaluations run concurrently on different XPU tiles.
+        metrics_path = os.path.join(folder_path, 'metrics.csv')
+        with open(metrics_path, 'w', newline='') as metrics_file:
             writer = csv.DictWriter(
                 metrics_file,
                 fieldnames=[
@@ -423,8 +433,7 @@ class Exp_Main(Exp_Basic):
                     'mspe', 'rse', 'corr_mean',
                 ],
             )
-            if needs_header:
-                writer.writeheader()
+            writer.writeheader()
             writer.writerow({
                 'model': self.args.model,
                 'setting': setting,
@@ -444,9 +453,9 @@ class Exp_Main(Exp_Basic):
             })
 
         # np.save(folder_path + 'metrics.npy', np.array([mae, mse, rmse, mape, mspe,rse, corr]))
-        np.save(folder_path + 'pred.npy', preds)
-        np.save(folder_path + 'true.npy', trues)
-        np.save(folder_path + 'x.npy', inputx)
+        np.save(os.path.join(folder_path, 'pred.npy'), preds)
+        np.save(os.path.join(folder_path, 'true.npy'), trues)
+        np.save(os.path.join(folder_path, 'x.npy'), inputx)
         return
 
     def predict(self, setting, load=False):
@@ -464,6 +473,7 @@ class Exp_Main(Exp_Basic):
         self.model.eval()
         with torch.no_grad():
             for i, (batch_x, batch_y, batch_x_mark, batch_y_mark) in enumerate(pred_loader):
+                raise_if_requested()
                 batch_x = batch_x.float().to(self.device)
                 batch_y = batch_y.float()
                 batch_x_mark = batch_x_mark.float().to(self.device)
@@ -482,6 +492,7 @@ class Exp_Main(Exp_Basic):
                         outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)
                 pred = outputs.detach().cpu().numpy()  # .squeeze()
                 preds.append(pred)
+                raise_if_requested()
 
         preds = np.array(preds)
         preds = preds.reshape(-1, preds.shape[-2], preds.shape[-1])

@@ -4,6 +4,54 @@ This is the official implementation of FITS. Please run the scripts in scripts\F
 
 See updates here: [Update](#update)
 
+## Aurora experiment-parallel benchmarks
+
+Tiny models are run as independent experiments, one process per XPU tile. From
+an interactive Aurora compute node, this command detects the 12 flat tiles and
+runs up to 12 dataset/horizon/seed combinations concurrently:
+
+```bash
+bash scripts/launch_benchmark.sh FITS train \
+  ETTh1 ETTh2 ETTm1 ETTm2 weather electricity traffic
+```
+
+The same command with `test` evaluates completed checkpoints in parallel. The
+pool uses no `mpiexec` or model-level DDP. It sets a distinct flat
+`ZE_AFFINITY_MASK` in every child, binds four CPU cores per child, staggers
+starts by two seconds, and defaults to zero DataLoader subprocesses per
+experiment. Tune the operational concurrency without changing experiment
+hyperparameters:
+
+```bash
+MODEL_MAX_PARALLEL=6 MODEL_LAUNCH_STAGGER_SECONDS=3 \
+  bash scripts/launch_benchmark.sh FITS train ETTh1 ETTh2
+```
+
+Scheduler evidence is written below
+`logs/FITS/aurora/benchmark_runs/<run-id>/`: `manifest.json`, `attempts.csv`,
+`events.jsonl`, `summary.json`, per-attempt logs, XPU health snapshots, raw
+`xpu-smi` telemetry, and a telemetry peak/counter summary. A Level Zero failure
+quarantines its tile and retries the task once elsewhere. An unhandled signal
+or critical health report stops new admissions and drains already-running
+experiments.
+
+Aurora `ze_peak` safety is primarily a teardown concern. On SIGINT/SIGTERM the
+pool starts no new work and sends no force signals. FITS records the signal,
+stops between batches, synchronizes submitted XPU work, releases references,
+and exits through normal Python teardown. Do not use `qdel -W force`; allow at
+least 60 seconds of scheduler kill grace. Monitoring is useful evidence but
+cannot by itself prove that the next PBS prologue will pass.
+
+See [the experiment-pool runbook](docs/aurora_experiment_pool.md) for resume,
+failure, and tuning controls.
+
+The full FITS reproduction (train, test, and five-seed summary) is available as
+one resumable command:
+
+```bash
+bash scripts/FITS/aurora/run_full_reproduction.sh
+```
+
 ## Aurora multi-tile training
 
 `run_longExp_F.py` supports single-node distributed training with one XCCL/DDP

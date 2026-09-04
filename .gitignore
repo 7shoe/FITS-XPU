@@ -6,6 +6,9 @@ __pycache__/
 # C extensions
 *.so
 
+# logs (for now)
+logs/
+
 # Distribution / packaging
 .Python
 build/
@@ -54,6 +57,10 @@ cover/
 # Aurora/PBS smoke-test output
 artifacts/aurora_smoke/
 artifacts/aurora_ddp_smoke/
+
+# Runtime-only Aurora benchmark evidence and completion markers
+logs/*/aurora/benchmark_runs/
+logs/*/aurora/run_status/
 
 # Translations
 *.mo

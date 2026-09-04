@@ -9,7 +9,7 @@ scripts/<MODEL>/aurora/         Aurora launchers
 scripts/<MODEL>/legacy_*/       non-supported historical scripts, if any
 /lus/.../TimeSeriesTraining/
   <MODEL>_checkpoints/<MODEL>/  checkpoints
-  <MODEL>_results/<MODEL>/      arrays, plots, metrics.csv
+  <MODEL>_results/<MODEL>/      per-setting arrays, plots, metrics.csv
 ```
 
 `FITS` is active. `DIFFS`, `ANG`, and `ROUTER` are reserved lanes; they contain
@@ -39,6 +39,12 @@ datasets with:
 ```bash
 bash scripts/launch_benchmark.sh FITS train ETTh1
 ```
+
+This launcher is experiment-parallel: it dynamically assigns independent
+dataset/horizon/seed tasks to distinct flat XPU tiles. A future lane's
+`run_selected.sh` must honor `MODEL_ZE_AFFINITY_MASK`, require exactly one
+visible XPU when `MODEL_EXPECT_SINGLE_XPU=1`, and provide cooperative
+SIGINT/SIGTERM teardown. See [the Aurora pool contract](aurora_experiment_pool.md).
 
 FITS evaluation writes a standard `metrics.csv`; merge all model lanes after
 evaluation and produce a five-seed comparison table with:

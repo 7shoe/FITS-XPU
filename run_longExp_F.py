@@ -1,12 +1,16 @@
 import argparse
+import gc
 import os
 import torch
 from exp.exp_main_F import Exp_Main
 import random
 import numpy as np
-from utils.device import empty_cache, xpu_is_available
+from utils.device import empty_cache, synchronize, xpu_is_available
 from utils.distributed import (barrier, cleanup_distributed,
                                initialize_distributed)
+from utils.graceful_shutdown import (GracefulShutdown,
+                                     install_signal_handlers,
+                                     raise_if_requested)
 
 
 def str_to_bool(value):
@@ -141,6 +145,22 @@ parser.add_argument('--H_order', type=int,default=2)
 
 args = parser.parse_args()
 
+# Record SIGINT/SIGTERM and unwind only at explicit batch boundaries.  Abruptly
+# terminating a process with a live Level Zero context has been associated with
+# Aurora's subsequent ze_peak prologue failures.
+install_signal_handlers()
+
+has_xpu = bool(hasattr(torch, 'xpu') and torch.xpu.is_available())
+if os.environ.get('MODEL_REQUIRE_XPU') == '1' and not has_xpu:
+    parser.error('No PyTorch XPU is visible; request/allocate a compute node first')
+visible_xpus = torch.xpu.device_count() if has_xpu else 0
+if os.environ.get('MODEL_EXPECT_SINGLE_XPU') == '1' and visible_xpus != 1:
+    parser.error(
+        'experiment-pool child expected exactly one XPU, but sees {}; check '
+        'ZE_FLAT_DEVICE_HIERARCHY/ZE_AFFINITY_MASK'.format(visible_xpus)
+    )
+print('Using PyTorch {}; visible XPUs: {}'.format(torch.__version__, visible_xpus))
+
 args.use_gpu = True if xpu_is_available() and args.use_gpu else False
 args.distributed = bool(args.distributed or args.use_multi_gpu)
 
@@ -165,6 +185,7 @@ if 'noise' in args.aug_method:
     args.batch_size = args.batch_size * 2 
 
 distributed_context = None
+graceful_signal = None
 try:
     distributed_context = initialize_distributed(
         args.distributed, use_accelerator=args.use_gpu
@@ -239,17 +260,22 @@ try:
                 exp.train(setting, ft=True)
             elif args.train_mode == 2:
                 exp.train(setting, ft=False)
+                raise_if_requested()
                 exp.train(setting, ft=True)
+            raise_if_requested()
 
             if args.run_test:
                 print('>>>>>>>testing : {}<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<'.format(setting))
                 exp.test(setting)
+                raise_if_requested()
 
             if args.do_predict:
                 print('>>>>>>>predicting : {}<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<'.format(setting))
                 exp.predict(setting, True)
+                raise_if_requested()
 
             empty_cache()
+            raise_if_requested()
             barrier(distributed_context)
     else:
         ii = 0
@@ -267,6 +293,45 @@ try:
         print('>>>>>>>testing : {}<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<'.format(setting))
         exp.test(setting, test=1)
         empty_cache()
+        raise_if_requested()
+except GracefulShutdown as shutdown:
+    graceful_signal = shutdown.signum
+    print(
+        'GRACEFUL_XPU_SHUTDOWN safe boundary reached: signal={}'.format(
+            graceful_signal
+        ),
+        flush=True,
+    )
 finally:
     if distributed_context is not None:
         cleanup_distributed(distributed_context)
+
+if graceful_signal is not None:
+    # Reap DataLoader workers and release model/tensor references before the
+    # interpreter destroys its Level Zero context.  Synchronize is evidence
+    # that queued work drained; normal process exit performs context teardown.
+    try:
+        synchronize(getattr(args, 'gpu', None))
+    except Exception as exc:
+        print(
+            'GRACEFUL_XPU_SHUTDOWN synchronize failed: {!r}; '
+            'continuing normal interpreter teardown'.format(exc),
+            flush=True,
+        )
+    try:
+        empty_cache()
+    except Exception as exc:
+        print(
+            'GRACEFUL_XPU_SHUTDOWN empty_cache failed: {!r}; '
+            'continuing normal interpreter teardown'.format(exc),
+            flush=True,
+        )
+    if 'exp' in globals():
+        del exp
+    gc.collect()
+    print(
+        'GRACEFUL_XPU_SHUTDOWN cleanup complete: signal={}; '
+        'forced_signal=none'.format(graceful_signal),
+        flush=True,
+    )
+    raise SystemExit(128 + graceful_signal)

@@ -26,16 +26,26 @@ case "$pred_len" in
 esac
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
-source /home/siebenschuh/Projects/Aurora_HPC/env_tsfm/activate_tsfm_venv.sh
+if [[ "${MODEL_ENV_READY:-0}" != 1 ]]; then
+    source /home/siebenschuh/Projects/Aurora_HPC/env_tsfm/activate_tsfm_venv.sh
+fi
 
 cd "$repo_root"
 
-# Preserve scheduler-assigned affinity.  Set FITS_ZE_AFFINITY_MASK only when
-# manually choosing a visible tile on an interactive node.
-if [[ -n "${FITS_ZE_AFFINITY_MASK:-}" ]]; then
-    export ZE_AFFINITY_MASK="$FITS_ZE_AFFINITY_MASK"
+# Preserve scheduler-assigned affinity. MODEL_ZE_AFFINITY_MASK is the shared
+# experiment-pool contract; FITS_ZE_AFFINITY_MASK remains a compatible manual
+# override for direct runs.
+selected_tile="${MODEL_ZE_AFFINITY_MASK:-${FITS_ZE_AFFINITY_MASK:-}}"
+if [[ -n "$selected_tile" ]]; then
+    export ZE_AFFINITY_MASK="$selected_tile"
 fi
-export OMP_NUM_THREADS="${FITS_OMP_NUM_THREADS:-4}"
+cpu_threads="${FITS_OMP_NUM_THREADS:-${MODEL_CPU_THREADS:-4}}"
+export OMP_NUM_THREADS="$cpu_threads"
+export MKL_NUM_THREADS="$cpu_threads"
+export OPENBLAS_NUM_THREADS="$cpu_threads"
+export NUMEXPR_MAX_THREADS="$cpu_threads"
+export NUMEXPR_NUM_THREADS="$cpu_threads"
+export MODEL_REQUIRE_XPU=1
 checkpoints_root="${FITS_CHECKPOINTS_ROOT:-/lus/flare/projects/FRAME-IDP/siebenschuh/TimeSeriesTraining/FITS_checkpoints/FITS}"
 results_root="${FITS_RESULTS_ROOT:-/lus/flare/projects/FRAME-IDP/siebenschuh/TimeSeriesTraining/FITS_results/FITS}"
 
@@ -87,20 +97,35 @@ case "$dataset" in
     *) echo "unknown dataset: $dataset" >&2; exit 2 ;;
 esac
 
-python - <<'PY'
-import torch
-if not hasattr(torch, "xpu") or not torch.xpu.is_available():
-    raise SystemExit("No PyTorch XPU is visible; request/allocate a compute node first.")
-print(f"Using PyTorch {torch.__version__}; visible XPUs: {torch.xpu.device_count()}")
-PY
-
 # The original runner doubles this passed value when no augmentation is used.
 # Thus 64 becomes the historical effective batch size of 128 (Weather: 32->64).
 epochs="${FITS_TRAIN_EPOCHS:-100}"
-workers="${FITS_NUM_WORKERS:-4}"
+workers="${FITS_NUM_WORKERS:-${MODEL_NUM_WORKERS:-4}}"
 model_id="aurora_${dataset}_sl${seq_len}_pl${pred_len}_h${h_order}_m${train_mode}_s${seed}"
-log_dir="logs/FITS/aurora"
+logs_root="${MODEL_LOGS_ROOT:-$repo_root/logs}"
+if [[ "$logs_root" != /* ]]; then
+    logs_root="$repo_root/$logs_root"
+fi
+log_dir="$logs_root/FITS/aurora"
 mkdir -p "$log_dir"
+setting="${model_id}_FITS_${data}_ftM_sl${seq_len}_ll48_pl${pred_len}_H${h_order}_0"
+status_dir="$log_dir/run_status"
+status_file="$status_dir/${model_id}.${action}.complete"
+mkdir -p "$status_dir"
+
+# Refuse duplicate pools/direct launches before either process can write the
+# same checkpoint or result setting. The descriptor remains inherited by the
+# Python process, so the lock also survives an accidental launcher-shell exit.
+exec 9>"$status_dir/${model_id}.lock"
+if ! flock -n 9; then
+    echo "Run is already active: ${model_id} ${action}" >&2
+    exit 75
+fi
+
+if [[ "${MODEL_SKIP_COMPLETED:-0}" == 1 && -f "$status_file" ]]; then
+    echo "Already completed; skipping ${model_id} ${action}"
+    exit 0
+fi
 
 args=(
     --is_training 1
@@ -132,11 +157,64 @@ if [[ ${#individual[@]} -gt 0 ]]; then
     args+=("${individual[@]}")
 fi
 
+received_signal=""
+python_pid=""
+
+forward_graceful_signal() {
+    local signal_name="$1"
+    received_signal="$signal_name"
+    echo "run_selected received ${signal_name}; requesting cooperative Python shutdown" >&2
+    if [[ -n "$python_pid" ]] && kill -0 "$python_pid" 2>/dev/null; then
+        kill -s "$signal_name" "$python_pid" 2>/dev/null || true
+    fi
+}
+
+trap 'forward_graceful_signal TERM' TERM
+trap 'forward_graceful_signal INT' INT
+
+run_and_log() {
+    local log_path="$1"
+    shift
+    local rc
+
+    set +e
+    # tee ignores job-control signals and drains Python's output through EOF;
+    # otherwise a qdel/Control-C could kill tee first and give Python a broken
+    # stdout pipe while it is trying to shut its XPU context down cleanly.
+    python -u run_longExp_F.py "$@" > >(trap '' INT TERM; tee "$log_path") 2>&1 &
+    python_pid=$!
+    while true; do
+        wait "$python_pid"
+        rc=$?
+        if ! kill -0 "$python_pid" 2>/dev/null; then
+            break
+        fi
+    done
+    # Let the process-substitution tee consume EOF before recording lifecycle.
+    wait 2>/dev/null || true
+    set -e
+
+    echo "RUN_LIFECYCLE model_id=${model_id} action=${action} "\
+"python_exit=${rc} signal_observed=${received_signal:-none} forced_signal=none"
+    return "$rc"
+}
+
+run_rc=0
 if [[ "$action" == train ]]; then
-    # Training intentionally has no --run_test.  This preserves a held-out test
+    # Training intentionally has no --run_test. This preserves a held-out test
     # set for the separate evaluation step below.
-    python -u run_longExp_F.py "${args[@]}" |& tee "$log_dir/${model_id}.train.log"
+    run_and_log "$log_dir/${model_id}.train.log" "${args[@]}" || run_rc=$?
 else
     args[1]=0
-    python -u run_longExp_F.py "${args[@]}" |& tee "$log_dir/${model_id}.test.log"
+    run_and_log "$log_dir/${model_id}.test.log" "${args[@]}" || run_rc=$?
 fi
+
+if [[ "$run_rc" -eq 0 && -z "$received_signal" ]]; then
+    status_tmp="${status_file}.tmp.$$"
+    printf 'setting=%s\naction=%s\ntile=%s\ncompleted_utc=%s\n' \
+        "$setting" "$action" "${selected_tile:-unbound}" \
+        "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$status_tmp"
+    mv "$status_tmp" "$status_file"
+fi
+
+exit "$run_rc"
